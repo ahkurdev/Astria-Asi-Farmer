@@ -1,0 +1,20 @@
+# Python cache and temporary files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Temporary probes and dumps
+*_dump.html
+keys_page.html
+probe_*.py
+find_*.py
+inspect_*.py
+dump_*.py
+test_*.py
+guerrilla_test.py
+experience_test.py
+scan_chunks.py
+
+# Sensitive router backup files
+*9router-backup*.json
