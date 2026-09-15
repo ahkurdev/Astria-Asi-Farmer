@@ -1,4 +1,5 @@
 import urllib.request
+import urllib.error
 import http.cookiejar
 import json
 import time
@@ -6,6 +7,7 @@ import re
 import uuid
 import sys
 import os
+import shutil
 
 DEFAULT_BACKUP_PATH = r"c:\Allan\CODE\TOOLS\FARMER\astria\9router-backup-2026-09-15T05-42-33-258Z.json"
 DEFAULT_EXPORT_PATH = r"c:\Allan\CODE\TOOLS\FARMER\astria\harvested_keys.json"
@@ -14,7 +16,7 @@ TOKENS_PER_ACCOUNT = 100_000_000
 
 def get_guerrilla_email():
     req = urllib.request.Request("https://api.guerrillamail.com/ajax.php?f=get_email_address", headers={"User-Agent": "Mozilla/5.0"})
-    with urllib.request.urlopen(req) as res:
+    with urllib.request.urlopen(req, timeout=15) as res:
         data = json.loads(res.read().decode("utf-8"))
         return data["email_addr"], data["sid_token"]
 
@@ -22,20 +24,24 @@ def check_guerrilla_otp(sid_token, timeout=40):
     start = time.time()
     while time.time() - start < timeout:
         time.sleep(3)
-        req = urllib.request.Request(f"https://api.guerrillamail.com/ajax.php?f=check_email&seq=0&sid_token={sid_token}", headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req) as res:
-            data = json.loads(res.read().decode("utf-8"))
-            emails = data.get("list", [])
-            for em in emails:
-                if "Logto" in em.get("mail_subject", "") or "Atria" in em.get("mail_subject", "") or "verification" in em.get("mail_subject", "").lower():
-                    mid = em["mail_id"]
-                    req_fetch = urllib.request.Request(f"https://api.guerrillamail.com/ajax.php?f=fetch_email&email_id={mid}&sid_token={sid_token}", headers={"User-Agent": "Mozilla/5.0"})
-                    with urllib.request.urlopen(req_fetch) as f_res:
-                        f_data = json.loads(f_res.read().decode("utf-8"))
-                        body = f_data.get("mail_body", "")
-                        match = re.search(r'\b\d{6}\b', body)
-                        if match:
-                            return match.group(0)
+        try:
+            req = urllib.request.Request(f"https://api.guerrillamail.com/ajax.php?f=check_email&seq=0&sid_token={sid_token}", headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=15) as res:
+                data = json.loads(res.read().decode("utf-8"))
+                emails = data.get("list", [])
+                for em in emails:
+                    subject = em.get("mail_subject", "").lower()
+                    if "logto" in subject or "atria" in subject or "verification" in subject or "code" in subject:
+                        mid = em["mail_id"]
+                        req_fetch = urllib.request.Request(f"https://api.guerrillamail.com/ajax.php?f=fetch_email&email_id={mid}&sid_token={sid_token}", headers={"User-Agent": "Mozilla/5.0"})
+                        with urllib.request.urlopen(req_fetch, timeout=15) as f_res:
+                            f_data = json.loads(f_res.read().decode("utf-8"))
+                            body = f_data.get("mail_body", "")
+                            match = re.search(r'\b\d{6}\b', body)
+                            if match:
+                                return match.group(0)
+        except Exception:
+            continue
     return None
 
 def build_connection_object(email, api_key, custom_name=None):
@@ -75,20 +81,35 @@ def inject_to_9router_backup(target_path, new_connections):
         print(f"[!] Target file '{target_path}' not found!")
         return False
 
-    with open(target_path, "r", encoding="utf-8") as f:
-        data = json.load(f)
+    # Create safety backup copy if not already created
+    bak_path = target_path + ".bak"
+    if not os.path.exists(bak_path):
+        try:
+            shutil.copyfile(target_path, bak_path)
+        except Exception as e:
+            print(f"[!] Warning: Could not create backup file ({e})")
 
-    if "providerConnections" not in data:
-        data["providerConnections"] = []
+    try:
+        with open(target_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
 
-    for conn in reversed(new_connections):
-        data["providerConnections"].insert(0, conn)
+        if "providerConnections" not in data:
+            data["providerConnections"] = []
 
-    with open(target_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
+        for conn in reversed(new_connections):
+            data["providerConnections"].insert(0, conn)
 
-    print(f"[+] Successfully injected {len(new_connections)} connection(s) directly into: {target_path}")
-    return True
+        # Atomic write with temp file
+        temp_path = target_path + ".tmp"
+        with open(temp_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        os.replace(temp_path, target_path)
+
+        print(f"    [+] Saved & injected {len(new_connections)} connection(s) directly into 9router backup.")
+        return True
+    except Exception as e:
+        print(f"[!] Failed to write to {target_path}: {e}")
+        return False
 
 def save_standalone_json(export_path, new_connections):
     export_data = {
@@ -99,10 +120,16 @@ def save_standalone_json(export_path, new_connections):
         "connections": new_connections,
         "rawApiKeys": [c["apiKey"] for c in new_connections]
     }
-    with open(export_path, "w", encoding="utf-8") as f:
-        json.dump(export_data, f, indent=2, ensure_ascii=False)
-    print(f"[+] Successfully saved standalone JSON to: {export_path}")
-    return True
+    try:
+        temp_path = export_path + ".tmp"
+        with open(temp_path, "w", encoding="utf-8") as f:
+            json.dump(export_data, f, indent=2, ensure_ascii=False)
+        os.replace(temp_path, export_path)
+        print(f"    [+] Saved standalone JSON to: {export_path}")
+        return True
+    except Exception as e:
+        print(f"[!] Failed to write to {export_path}: {e}")
+        return False
 
 def farm_single_account(account_index=1, captcha_token=None):
     print(f"\n--------------------------------------------------", flush=True)
@@ -113,9 +140,9 @@ def farm_single_account(account_index=1, captcha_token=None):
 
         cj = http.cookiejar.CookieJar()
         opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
-        opener.open("https://api.atria-asi.ai/console")
+        opener.open(urllib.request.Request("https://api.atria-asi.ai/console", headers={"User-Agent": "Mozilla/5.0"}))
 
-        # 1. Experience Register (Include captchaToken if present)
+        # 1. Experience Register
         init_payload = {"interactionEvent": "Register"}
         if captcha_token:
             init_payload["captchaToken"] = captcha_token
@@ -141,8 +168,8 @@ def farm_single_account(account_index=1, captcha_token=None):
         print(f"    Requesting OTP... Waiting for incoming email...", flush=True)
         otp = check_guerrilla_otp(sid)
         if not otp:
-            print(f"[-] Try {account_index} account: FAILED (OTP Timeout)", flush=True)
-            return None
+            print(f"[-] Try {account_index} account: FAILED (OTP Timeout from GuerrillaMail)", flush=True)
+            return {"status": "otp_timeout"}
         print(f"    OTP received: {otp}", flush=True)
 
         # 3. Verify OTP
@@ -172,7 +199,7 @@ def farm_single_account(account_index=1, captcha_token=None):
         )
         sub_body = json.loads(opener.open(req).read().decode("utf-8"))
         redirect_url = sub_body.get("redirectTo")
-        opener.open(redirect_url)
+        opener.open(urllib.request.Request(redirect_url, headers={"User-Agent": "Mozilla/5.0"}))
 
         # 6. Create API Key
         key_name = f"as_farm_{account_index}_{email.split('@')[0]}"
@@ -189,24 +216,25 @@ def farm_single_account(account_index=1, captcha_token=None):
         if api_key:
             print(f"[+] Try {account_index} account: SUCCESS -> Key: {api_key}", flush=True)
             conn_obj = build_connection_object(email, api_key, custom_name=f"as_auto_{email.split('@')[0]}")
-            return {"email": email, "apiKey": api_key, "connection": conn_obj}
+            return {"status": "success", "email": email, "apiKey": api_key, "connection": conn_obj}
         else:
             print(f"[-] Try {account_index} account: FAILED (Could not generate API key)", flush=True)
-            return None
+            return {"status": "key_generation_failed"}
     except urllib.error.HTTPError as he:
         body = he.read().decode("utf-8", errors="ignore")
         if "captcha_required" in body:
-            print(f"[-] Try {account_index} account: FAILED (Cloudflare Turnstile CAPTCHA triggered - rate limited on IP)", flush=True)
+            print(f"[-] Try {account_index} account: FAILED (Cloudflare Turnstile verification required)", flush=True)
+            return {"status": "captcha_required"}
         else:
             print(f"[-] Try {account_index} account: FAILED (HTTP {he.code}: {body})", flush=True)
-        return None
+            return {"status": f"http_{he.code}"}
     except Exception as e:
-        print(f"[-] Try {account_index} account: FAILED ({e})", flush=True)
-        return None
+        print(f"[-] Try {account_index} account: FAILED (Network/System Error: {e})", flush=True)
+        return {"status": "error", "error": str(e)}
 
 def main():
     print("=================================================================")
-    print("        ATRIA AUTOMATED BULK FARMING TOOL v2.1 (EN)              ")
+    print("        ATRIA AUTOMATED BULK FARMING TOOL v2.2 (EN)              ")
     print("=================================================================\n")
 
     # 1. Input Total Target
@@ -238,24 +266,26 @@ def main():
         custom_exp = input("   Press [ENTER] to use default, or enter a custom path: ").strip()
         export_json_path = custom_exp if custom_exp else DEFAULT_EXPORT_PATH
 
-    print(f"\n[*] STARTING FARMING PROCESS ({total_target} Target Accounts)...")
+    print(f"\n[*] STARTING PROCESS ({total_target} Target Accounts)...")
     print("=================================================================")
 
     success_count = 0
     fail_count = 0
+    error_stats = {}
 
     try:
         for i in range(1, total_target + 1):
             result = farm_single_account(account_index=i)
-            if result:
+            status = result.get("status") if result else "unknown"
+
+            if status == "success":
                 success_count += 1
                 conn = result["connection"]
                 
-                # Instant save / injection per successful account
+                # Instant atomic save per account
                 if inject_direct:
                     inject_to_9router_backup(target_json_path, [conn])
                 else:
-                    # Append to standalone json immediately
                     current_conns = []
                     if os.path.exists(export_json_path):
                         try:
@@ -268,19 +298,28 @@ def main():
                     save_standalone_json(export_json_path, current_conns)
             else:
                 fail_count += 1
+                error_stats[status] = error_stats.get(status, 0) + 1
 
-            print(f"    [Current Status: {success_count} Success | {fail_count} Failed | Total Target: {total_target}]", flush=True)
+            print(f"    [Status: {success_count} Success | {fail_count} Failed | Target: {total_target}]", flush=True)
             time.sleep(2)
     except KeyboardInterrupt:
-        print("\n[!] Process stopped by user (Ctrl+C). All previous successful accounts are already safely saved!")
+        print("\n\n[!] Process stopped by user (Ctrl+C). All previous successful accounts are already saved!")
 
     total_tokens = success_count * TOKENS_PER_ACCOUNT
     formatted_tokens = f"{total_tokens:,}"
 
     print("\n=================================================================")
-    print(f"\n>>> {success_count} account success {formatted_tokens} token granted <<<\n")
+    print("                     EXECUTION SUMMARY                           ")
     print("=================================================================")
-    print("All tasks completed! <3")
+    print(f"[*] Total Target Accounts : {total_target}")
+    print(f"[+] Total Success         : {success_count}")
+    print(f"[-] Total Failed          : {fail_count}")
+    if error_stats:
+        print("[-] Failure Breakdown     :")
+        for err_type, count in error_stats.items():
+            print(f"    - {err_type}: {count}")
+    print(f"[>] Estimated Tokens      : {formatted_tokens} tokens")
+    print("=================================================================")
 
 if __name__ == "__main__":
     main()
