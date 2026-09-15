@@ -241,35 +241,46 @@ def main():
     print(f"\n[*] STARTING FARMING PROCESS ({total_target} Target Accounts)...")
     print("=================================================================")
 
-    success_conns = []
     success_count = 0
     fail_count = 0
 
-    for i in range(1, total_target + 1):
-        result = farm_single_account(account_index=i)
-        if result:
-            success_count += 1
-            success_conns.append(result["connection"])
-        else:
-            fail_count += 1
+    try:
+        for i in range(1, total_target + 1):
+            result = farm_single_account(account_index=i)
+            if result:
+                success_count += 1
+                conn = result["connection"]
+                
+                # Instant save / injection per successful account
+                if inject_direct:
+                    inject_to_9router_backup(target_json_path, [conn])
+                else:
+                    # Append to standalone json immediately
+                    current_conns = []
+                    if os.path.exists(export_json_path):
+                        try:
+                            with open(export_json_path, "r", encoding="utf-8") as f:
+                                existing = json.load(f)
+                                current_conns = existing.get("connections", [])
+                        except Exception:
+                            current_conns = []
+                    current_conns.append(conn)
+                    save_standalone_json(export_json_path, current_conns)
+            else:
+                fail_count += 1
 
-        print(f"    [Current Status: {success_count} Success | {fail_count} Failed | Total Target: {total_target}]", flush=True)
-        time.sleep(2)
-
-    # Output / Save Handling
-    print("\n=================================================================")
-    if success_conns:
-        if inject_direct:
-            inject_to_9router_backup(target_json_path, success_conns)
-        else:
-            save_standalone_json(export_json_path, success_conns)
+            print(f"    [Current Status: {success_count} Success | {fail_count} Failed | Total Target: {total_target}]", flush=True)
+            time.sleep(2)
+    except KeyboardInterrupt:
+        print("\n[!] Process stopped by user (Ctrl+C). All previous successful accounts are already safely saved!")
 
     total_tokens = success_count * TOKENS_PER_ACCOUNT
     formatted_tokens = f"{total_tokens:,}"
 
+    print("\n=================================================================")
     print(f"\n>>> {success_count} account success {formatted_tokens} token granted <<<\n")
     print("=================================================================")
-    print("All tasks completed successfully! <3")
+    print("All tasks completed! <3")
 
 if __name__ == "__main__":
     main()
