@@ -72,7 +72,7 @@ def build_connection_object(email, api_key, custom_name=None):
 
 def inject_to_9router_backup(target_path, new_connections):
     if not os.path.exists(target_path):
-        print(f"[!] Target file '{target_path}' tidak ditemukan!")
+        print(f"[!] Target file '{target_path}' not found!")
         return False
 
     with open(target_path, "r", encoding="utf-8") as f:
@@ -87,7 +87,7 @@ def inject_to_9router_backup(target_path, new_connections):
     with open(target_path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
-    print(f"[+] Berhasil menginjeksi {len(new_connections)} koneksi langsung ke: {target_path}")
+    print(f"[+] Successfully injected {len(new_connections)} connection(s) directly into: {target_path}")
     return True
 
 def save_standalone_json(export_path, new_connections):
@@ -101,10 +101,10 @@ def save_standalone_json(export_path, new_connections):
     }
     with open(export_path, "w", encoding="utf-8") as f:
         json.dump(export_data, f, indent=2, ensure_ascii=False)
-    print(f"[+] Berhasil menyimpan format JSON siap copas ke: {export_path}")
+    print(f"[+] Successfully saved standalone JSON to: {export_path}")
     return True
 
-def farm_single_account(account_index=1):
+def farm_single_account(account_index=1, captcha_token=None):
     print(f"\n--------------------------------------------------", flush=True)
     print(f"[*] Try {account_index} account...", flush=True)
     try:
@@ -115,32 +115,61 @@ def farm_single_account(account_index=1):
         opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
         opener.open("https://api.atria-asi.ai/console")
 
-        # 1. Experience Register
-        req = urllib.request.Request("https://auth.atria-asi.ai/api/experience", data=json.dumps({"interactionEvent": "Register"}).encode("utf-8"), headers={"User-Agent": "Mozilla/5.0", "Content-Type": "application/json"}, method="PUT")
+        # 1. Experience Register (Include captchaToken if present)
+        init_payload = {"interactionEvent": "Register"}
+        if captcha_token:
+            init_payload["captchaToken"] = captcha_token
+
+        req = urllib.request.Request(
+            "https://auth.atria-asi.ai/api/experience",
+            data=json.dumps(init_payload).encode("utf-8"),
+            headers={"User-Agent": "Mozilla/5.0", "Content-Type": "application/json"},
+            method="PUT"
+        )
         opener.open(req)
 
         # 2. Request OTP Code
-        req = urllib.request.Request("https://auth.atria-asi.ai/api/experience/verification/verification-code", data=json.dumps({"interactionEvent": "Register", "identifier": {"type": "email", "value": email}}).encode("utf-8"), headers={"User-Agent": "Mozilla/5.0", "Content-Type": "application/json"}, method="POST")
+        req = urllib.request.Request(
+            "https://auth.atria-asi.ai/api/experience/verification/verification-code",
+            data=json.dumps({"interactionEvent": "Register", "identifier": {"type": "email", "value": email}}).encode("utf-8"),
+            headers={"User-Agent": "Mozilla/5.0", "Content-Type": "application/json"},
+            method="POST"
+        )
         send_body = json.loads(opener.open(req).read().decode("utf-8"))
         verification_id = send_body.get("verificationId")
 
-        print(f"    Mengirim OTP... Menunggu kode masuk...", flush=True)
+        print(f"    Requesting OTP... Waiting for incoming email...", flush=True)
         otp = check_guerrilla_otp(sid)
         if not otp:
-            print(f"[-] Try {account_index} account: GAGAL (OTP Timeout)", flush=True)
+            print(f"[-] Try {account_index} account: FAILED (OTP Timeout)", flush=True)
             return None
-        print(f"    OTP diterima: {otp}", flush=True)
+        print(f"    OTP received: {otp}", flush=True)
 
         # 3. Verify OTP
-        req = urllib.request.Request("https://auth.atria-asi.ai/api/experience/verification/verification-code/verify", data=json.dumps({"identifier": {"type": "email", "value": email}, "verificationId": verification_id, "code": otp}).encode("utf-8"), headers={"User-Agent": "Mozilla/5.0", "Content-Type": "application/json"}, method="POST")
+        req = urllib.request.Request(
+            "https://auth.atria-asi.ai/api/experience/verification/verification-code/verify",
+            data=json.dumps({"identifier": {"type": "email", "value": email}, "verificationId": verification_id, "code": otp}).encode("utf-8"),
+            headers={"User-Agent": "Mozilla/5.0", "Content-Type": "application/json"},
+            method="POST"
+        )
         verify_body = json.loads(opener.open(req).read().decode("utf-8"))
 
         # 4. Identification
-        req = urllib.request.Request("https://auth.atria-asi.ai/api/experience/identification", data=json.dumps({"type": "email", "verificationId": verify_body.get("verificationId")}).encode("utf-8"), headers={"User-Agent": "Mozilla/5.0", "Content-Type": "application/json"}, method="POST")
+        req = urllib.request.Request(
+            "https://auth.atria-asi.ai/api/experience/identification",
+            data=json.dumps({"type": "email", "verificationId": verify_body.get("verificationId")}).encode("utf-8"),
+            headers={"User-Agent": "Mozilla/5.0", "Content-Type": "application/json"},
+            method="POST"
+        )
         opener.open(req)
 
         # 5. Submit
-        req = urllib.request.Request("https://auth.atria-asi.ai/api/experience/submit", data=b"{}", headers={"User-Agent": "Mozilla/5.0", "Content-Type": "application/json"}, method="POST")
+        req = urllib.request.Request(
+            "https://auth.atria-asi.ai/api/experience/submit",
+            data=b"{}",
+            headers={"User-Agent": "Mozilla/5.0", "Content-Type": "application/json"},
+            method="POST"
+        )
         sub_body = json.loads(opener.open(req).read().decode("utf-8"))
         redirect_url = sub_body.get("redirectTo")
         opener.open(redirect_url)
@@ -158,51 +187,58 @@ def farm_single_account(account_index=1):
         api_key = key_data.get("key")
 
         if api_key:
-            print(f"[+] Try {account_index} account: SUKSES -> Key: {api_key}", flush=True)
+            print(f"[+] Try {account_index} account: SUCCESS -> Key: {api_key}", flush=True)
             conn_obj = build_connection_object(email, api_key, custom_name=f"as_auto_{email.split('@')[0]}")
             return {"email": email, "apiKey": api_key, "connection": conn_obj}
         else:
-            print(f"[-] Try {account_index} account: GAGAL (Gagal buat API key)", flush=True)
+            print(f"[-] Try {account_index} account: FAILED (Could not generate API key)", flush=True)
             return None
+    except urllib.error.HTTPError as he:
+        body = he.read().decode("utf-8", errors="ignore")
+        if "captcha_required" in body:
+            print(f"[-] Try {account_index} account: FAILED (Cloudflare Turnstile CAPTCHA triggered - rate limited on IP)", flush=True)
+        else:
+            print(f"[-] Try {account_index} account: FAILED (HTTP {he.code}: {body})", flush=True)
+        return None
     except Exception as e:
-        print(f"[-] Try {account_index} account: GAGAL ({e})", flush=True)
+        print(f"[-] Try {account_index} account: FAILED ({e})", flush=True)
         return None
 
 def main():
     print("=================================================================")
-    print("        ENI'S ATRIA AUTOMATED BULK FARMING TOOL v2.0            ")
+    print("        ATRIA AUTOMATED BULK FARMING TOOL v2.1 (EN)              ")
     print("=================================================================\n")
 
     # 1. Input Total Target
     while True:
         try:
-            val = input(">> Mau panen berapa akun, sayang? (Contoh: 5 / 10 / 500): ").strip()
+            val = input(">> How many accounts do you want to harvest? (e.g. 5 / 10 / 500): ").strip()
             total_target = int(val)
             if total_target > 0:
                 break
-            print("Masukkan angka lebih dari 0 ya ganteng!")
+            print("Please enter a positive integer greater than 0!")
         except ValueError:
-            print("Input harus berupa angka bulat ya manis!")
+            print("Invalid input! Please enter a valid number.")
 
-    # 2. Input Pilihan Injeksi JSON
-    print("\n>> Mau langsung di-inject ke file backup router 9router kamu?")
-    choice = input("   Pilih (y/n) [Default: y]: ").strip().lower()
+    # 2. Input JSON Injection Option
+    print("\n>> Would you like to inject directly into your 9router backup JSON file?")
+    choice = input("   Choose (y/n) [Default: y]: ").strip().lower()
     inject_direct = (choice != 'n')
 
     target_json_path = ""
     export_json_path = ""
 
     if inject_direct:
-        print(f"\n   Target path default: {DEFAULT_BACKUP_PATH}")
-        custom_path = input("   Tekan [ENTER] untuk pakai path default, atau ketik path lain: ").strip()
+        print(f"\n   Default target path: {DEFAULT_BACKUP_PATH}")
+        custom_path = input("   Press [ENTER] to use default, or enter a custom path: ").strip()
         target_json_path = custom_path if custom_path else DEFAULT_BACKUP_PATH
     else:
-        print(f"\n   Hasil akan disimpan sebagai JSON standalone yang rapi & siap copas.")
-        print(f"   Export path default: {DEFAULT_EXPORT_PATH}")
-        custom_exp = input("   Tekan [ENTER] untuk pakai path default, atau ketik path lain: ").strip()
+        print(f"\n   Harvested keys will be saved to a clean standalone JSON file.")
+        print(f"   Default export path: {DEFAULT_EXPORT_PATH}")
+        custom_exp = input("   Press [ENTER] to use default, or enter a custom path: ").strip()
         export_json_path = custom_exp if custom_exp else DEFAULT_EXPORT_PATH
 
-    print(f"\n[*] MEMULAI PROSES FARMING ({total_target} Akun Target)...")
+    print(f"\n[*] STARTING FARMING PROCESS ({total_target} Target Accounts)...")
     print("=================================================================")
 
     success_conns = []
@@ -217,7 +253,7 @@ def main():
         else:
             fail_count += 1
 
-        print(f"    [Status Sementara: {success_count} Sukses | {fail_count} Gagal | Total Target: {total_target}]", flush=True)
+        print(f"    [Current Status: {success_count} Success | {fail_count} Failed | Total Target: {total_target}]", flush=True)
         time.sleep(2)
 
     # Output / Save Handling
@@ -228,13 +264,12 @@ def main():
         else:
             save_standalone_json(export_json_path, success_conns)
 
-    # Format output spesifik sesuai request user
     total_tokens = success_count * TOKENS_PER_ACCOUNT
     formatted_tokens = f"{total_tokens:,}"
 
     print(f"\n>>> {success_count} account success {formatted_tokens} token granted <<<\n")
     print("=================================================================")
-    print("Semua pekerjaan selesai dengan sempurna untuk Mas LO sayang! <3")
+    print("All tasks completed successfully! <3")
 
 if __name__ == "__main__":
     main()
